@@ -1,26 +1,66 @@
 {
+  // This config governs everything under src/ — i.e. code that runs in
+  // the BROWSER. Compare to tsconfig.node.json, which governs
+  // vite.config.ts (code that runs in Node.js while you're developing,
+  // never shipped to a browser). Two different runtime environments,
+  // two different sets of available APIs, so: two different configs.
   "compilerOptions": {
+    // Caches incremental type-checking info between builds so `tsc`
+    // doesn't re-check everything from scratch every time — similar in
+    // spirit to incremental/obj folder build caching in MSBuild.
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
+    // Which JavaScript language version to assume/target. Modern
+    // browsers support ES2023 features natively, so TypeScript doesn't
+    // need to "downlevel" (rewrite) newer syntax into older equivalents.
     "target": "es2023",
+    // Which built-in type definitions are available to reference in code.
+    // "DOM" is what gives you types for `document`, `window`,
+    // `HTMLElement`, etc — without it, browser APIs wouldn't type-check
+    // at all. There's no automatic "you're in a browser" assumption;
+    // you opt in explicitly.
     "lib": ["ES2023", "DOM"],
     "module": "esnext",
+    // Brings in ambient types for Vite-specific features (e.g. importing
+    // image/CSS files, `import.meta.env`) that wouldn't otherwise be
+    // valid TypeScript.
     "types": ["vite/client"],
     "allowArbitraryExtensions": true,
+    // Don't type-check .d.ts files inside node_modules — massively
+    // speeds up compilation, and you generally trust published library
+    // types anyway rather than double-checking them yourself.
     "skipLibCheck": true,
 
     /* Bundler mode */
+    // Tells TypeScript to resolve imports the way a modern bundler
+    // (Vite/webpack/esbuild) does, rather than mimicking Node.js's
+    // older CommonJS resolution rules.
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
+    // Enforces a clean split between type-only imports/exports and real
+    // value ones (this is what makes `import type` mandatory rather than
+    // optional elsewhere in this project — see the comment in PingChart.tsx).
     "verbatimModuleSyntax": true,
     "moduleDetection": "force",
+    // This is TypeScript running purely as a type-checker here — it
+    // does NOT emit any .js output files itself. Vite/esbuild does the
+    // actual JS compilation; `tsc` is only used to catch type errors
+    // (e.g. via `npm run build`, which runs `tsc -b && vite build`).
     "noEmit": true,
+    // Enables JSX support and picks the modern transform that doesn't
+    // require `import React from 'react'` in every file just to use JSX.
     "jsx": "react-jsx",
 
     /* Linting */
+    // These four aren't type-checking in the traditional sense — they're
+    // extra strictness switches that turn certain code-quality issues
+    // (an unused local variable, an unused function parameter, a switch
+    // case that falls through without a `break`) into compile errors
+    // instead of silently allowing them.
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
+  // Only type-check files under src/ using these particular settings.
   "include": ["src"]
 }

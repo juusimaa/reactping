@@ -1,4 +1,12 @@
 {
+  // This root tsconfig doesn't configure any actual compilation itself
+  // ("files": [] means "compile nothing directly from here"). Its only
+  // job is "project references" below — splitting settings into two
+  // separate configs because app code (runs in the browser) and tooling
+  // code like vite.config.ts (runs in Node.js) need different compiler
+  // settings (different `lib`, different `types`, etc). Think of this
+  // file as roughly analogous to a .sln solution file that just points
+  // at two separate .csproj files, each with its own settings.
   "files": [],
   "references": [
     { "path": "./tsconfig.app.json" },

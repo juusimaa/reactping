@@ -7,7 +7,23 @@
     <title>reactping</title>
   </head>
   <body>
+    <!-- This empty div is the ENTIRE page as far as plain HTML is
+         concerned. Everything you'll ever see — the heading, the chart,
+         all of it — gets injected into this one element by React at
+         runtime. This pattern is called a "Single Page Application"
+         (SPA): unlike a traditional multi-page site (or classic ASP.NET
+         Web Forms, where each URL maps to a real .aspx page rendered on
+         the server), the browser loads this one HTML file once, and
+         JavaScript takes over rendering everything from here on. -->
     <div id="root"></div>
+    <!-- type="module" enables native browser ES module support (real
+         `import`/`export`, as used throughout src/), and lets the browser
+         load main.tsx directly during development. In production, Vite
+         replaces this src with a link to its bundled/optimized output —
+         you never ship raw .tsx to a browser; browsers can't run
+         TypeScript or JSX directly, they only understand plain
+         JavaScript. Vite (via esbuild/SWC) strips types and compiles JSX
+         behind the scenes, both at dev time and at build time. -->
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

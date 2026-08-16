@@ -1,4 +1,10 @@
 {
+  // This config governs vite.config.ts specifically — tooling code that
+  // runs under Node.js while you're developing (e.g. when you run
+  // `npm run dev`), never inside a browser. That's why "types" below is
+  // "node" rather than the "DOM" lib used in tsconfig.app.json: this
+  // code can use Node-only APIs and should NOT assume `window` or
+  // `document` exist.
   "compilerOptions": {
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo",
     "target": "es2023",
@@ -7,6 +13,9 @@
     "skipLibCheck": true,
 
     /* Bundler mode */
+    // "nodenext" (vs. "esnext" in the app config) tells TypeScript to
+    // follow Node.js's actual module resolution rules, since this file
+    // is executed directly by Node rather than bundled for a browser.
     "module": "nodenext",
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
@@ -19,5 +28,6 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
+  // Only vite.config.ts is checked under these Node-flavored rules.
   "include": ["vite.config.ts"]
 }
