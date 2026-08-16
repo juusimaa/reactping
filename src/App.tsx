@@ -1,23 +1,43 @@
+import { useEffect, useState } from 'react'
 import PingChart from './PingChart'
 import type { PingDataPoint } from './types'
 import './App.css'
 
-const fakeData: PingDataPoint[] = [
-  { time: '10:00:00', latencyMs: 24 },
-  { time: '10:00:05', latencyMs: 19 },
-  { time: '10:00:10', latencyMs: 31 },
-  { time: '10:00:15', latencyMs: 22 },
-  { time: '10:00:20', latencyMs: 45 },
-  { time: '10:00:25', latencyMs: 18 },
-  { time: '10:00:30', latencyMs: 27 },
-]
+const POLL_INTERVAL_MS = 2000
+const MAX_POINTS = 20
+
+function randomLatencyMs() {
+  return Math.round(15 + Math.random() * 40)
+}
+
+function nowLabel() {
+  return new Date().toLocaleTimeString()
+}
 
 function App() {
+  const [data, setData] = useState<PingDataPoint[]>(() => [
+    { time: nowLabel(), latencyMs: randomLatencyMs() },
+  ])
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      setData((prev) => {
+        const next = [...prev, { time: nowLabel(), latencyMs: randomLatencyMs() }]
+        return next.length > MAX_POINTS ? next.slice(next.length - MAX_POINTS) : next
+      })
+    }, POLL_INTERVAL_MS)
+
+    return () => clearInterval(id)
+  }, [])
+
   return (
     <main className="app">
       <h1>Ping Latency</h1>
-      <p className="subtitle">Static chart with hardcoded data (Step 2)</p>
-      <PingChart data={fakeData} />
+      <p className="subtitle">
+        Live polling every {POLL_INTERVAL_MS / 1000}s (Step 3) &middot; fake latency values,
+        rolling window of {MAX_POINTS} points
+      </p>
+      <PingChart data={data} />
     </main>
   )
 }
