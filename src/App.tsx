@@ -16,17 +16,33 @@ import './App.css'
 const POLL_INTERVAL_MS = 2000
 const MAX_POINTS = 20
 
-// Ordinary functions, same as private static helper methods in C#.
-// Return types are inferred here (TypeScript figures out `number` and
-// `string` from the function bodies) rather than written explicitly —
-// you could write `function randomLatencyMs(): number {` but it's
-// usually left off for simple cases like this.
-function randomLatencyMs() {
-  return Math.round(15 + Math.random() * 40)
-}
+// A CORS-friendly endpoint: httpbin.org replies with
+// `Access-Control-Allow-Origin: *`, so the browser lets our `fetch()` read
+// the response instead of blocking it as cross-origin. That's what lets us
+// use the default `cors` mode (rather than the more limited `no-cors`
+// mode) and check `response.ok` below.
+const TARGET_URL = 'https://httpbin.org/get'
 
 function nowLabel() {
   return new Date().toLocaleTimeString()
+}
+
+// Times one real round trip to TARGET_URL using performance.now() —
+// a high-resolution, monotonic clock meant exactly for measuring elapsed
+// time, unlike Date.now() (which can jump if the system clock changes).
+// Returns null if the request fails (offline, DNS error, non-2xx status,
+// etc.) so the caller can decide what to do instead of recording a bogus
+// number. `cache: 'no-store'` stops the browser from serving a cached
+// response, which would time a memory lookup rather than a network trip.
+async function measureLatencyMs() {
+  const start = performance.now()
+  try {
+    const response = await fetch(TARGET_URL, { cache: 'no-store' })
+    if (!response.ok) return null
+    return Math.round(performance.now() - start)
+  } catch {
+    return null
+  }
 }
 
 function App() {
@@ -35,24 +51,17 @@ function App() {
   // TypeScript what type `data` will hold, since it can't be inferred
   // from a lazily-computed initial value (see below).
   //
-  // Passing a FUNCTION `() => [...]` instead of the array directly is
-  // deliberate: useState only needs the initial value once, on the very
-  // first render. If we wrote `useState([{ time: nowLabel(), ... }])`
-  // instead, `nowLabel()` and `randomLatencyMs()` would be re-evaluated
-  // on every single re-render just to be thrown away (React ignores the
-  // argument after the first call) — wasted work. Passing a function
-  // defers that computation so it only runs once. This is a pattern
-  // called "lazy initial state."
-  //
   // Calling `setData` later does NOT mutate this array in place — it
   // tells React "here's the new value for this piece of state," which
   // triggers App to re-run (re-render) with `data` bound to the new
   // array. This is conceptually close to a bindable/observable property
   // in WPF/MVVM (like implementing INotifyPropertyChanged) — setting it
   // is what causes the UI to refresh, not the mutation itself.
-  const [data, setData] = useState<PingDataPoint[]>(() => [
-    { time: nowLabel(), latencyMs: randomLatencyMs() },
-  ])
+  //
+  // Starting empty (rather than one fake point) because the first real
+  // point now depends on an actual network round trip, which can't
+  // happen synchronously during render the way `randomLatencyMs()` could.
+  const [data, setData] = useState<PingDataPoint[]>([])
 
   // useEffect runs side effects (anything reaching outside of "compute
   // some UI from props/state") after React has rendered. Setting up a
@@ -61,46 +70,40 @@ function App() {
   //
   // The empty dependency array `[]` at the end means "run this setup
   // exactly once, when the component first mounts" — comparable to logic
-  // you'd put in a constructor. If we listed variables inside the array
-  // (e.g. `[someProp]`), the effect would re-run any time those specific
-  // values changed between renders, sort of like a change-triggered
-  // event handler. Get the dependency array wrong and you get stale
-  // closures or infinite re-run loops — it's the single trickiest part
-  // of learning React hooks.
+  // you'd put in a constructor.
   useEffect(() => {
-    // setInterval here is the same Web API you'd use in vanilla JS —
-    // no React-specific timer API exists. `id` is a handle we need later
-    // to cancel it, similar to holding onto a System.Threading.Timer
-    // instance so you can call Dispose() on it.
-    const id = setInterval(() => {
-      // Passing a FUNCTION to setData (`prev => next`), rather than a
-      // plain value, is the safe way to update state based on the
-      // previous state. Because this callback runs inside a setInterval
-      // closure, `data` from the outer scope would otherwise be "stale"
-      // — frozen at whatever it was when the effect first ran. Using the
-      // updater-function form always gives you the true latest value.
+    // `cancelled` guards against setting state after this effect's
+    // cleanup has run — e.g. a slow fetch resolving after the component
+    // unmounted, or (in React 18 StrictMode's dev-only double-invoke)
+    // after the first mount/cleanup pair. Closest C# analogy: checking a
+    // CancellationToken before touching shared state.
+    let cancelled = false
+
+    // setInterval's callback can't itself be `async` — setInterval just
+    // ignores whatever value it returns — so we define a normal async
+    // function and call it, both once immediately and on every tick.
+    async function poll() {
+      const latencyMs = await measureLatencyMs()
+      if (cancelled || latencyMs === null) return
       setData((prev) => {
-        const next = [...prev, { time: nowLabel(), latencyMs: randomLatencyMs() }]
-        // `[...prev, x]` is the spread operator — it copies all elements
-        // of `prev` into a new array literal, then appends `x`. This is
-        // the idiomatic way to add an item WITHOUT mutating the original
-        // array (compare to `prev.Add(x)` in C#, which mutates in place —
-        // that pattern is avoided in React because state is expected to
-        // be treated as immutable/read-only once set).
-        //
+        const next = [...prev, { time: nowLabel(), latencyMs }]
         // Trim to a rolling window of the last MAX_POINTS entries so the
         // chart doesn't grow forever.
         return next.length > MAX_POINTS ? next.slice(next.length - MAX_POINTS) : next
       })
-    }, POLL_INTERVAL_MS)
+    }
+
+    poll() // get the first point right away instead of waiting a full interval
+    const id = setInterval(poll, POLL_INTERVAL_MS)
 
     // The function returned from useEffect is its "cleanup" function —
     // React calls it automatically when the component unmounts (or
     // before the effect re-runs, if the dependency array weren't empty).
-    // This is the closest thing React has to C#'s IDisposable.Dispose():
-    // it's how you avoid leaking the timer if this component were ever
-    // removed from the page.
-    return () => clearInterval(id)
+    // This is the closest thing React has to C#'s IDisposable.Dispose().
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
   }, [])
 
   // The JSX returned here is re-evaluated every time `data` changes
@@ -115,8 +118,8 @@ function App() {
       <p className="subtitle">
         {/* Curly braces embed real TypeScript expressions inside JSX —
             here, simple arithmetic and string interpolation. */}
-        Live polling every {POLL_INTERVAL_MS / 1000}s (Step 3) &middot; fake latency values,
-        rolling window of {MAX_POINTS} points
+        Live polling every {POLL_INTERVAL_MS / 1000}s (Step 4) &middot; real fetch()
+        round-trip time to {TARGET_URL}, rolling window of {MAX_POINTS} points
       </p>
       {/* Passing our `data` state down as the `data` prop — PingChart has
           no idea this value changes over time; it just renders whatever
