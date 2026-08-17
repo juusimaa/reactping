@@ -6,6 +6,7 @@
 // that memory, in the exact order you call it every time the component
 // runs. That's why hook call order must stay identical between renders.
 import { useEffect, useState } from 'react'
+import type { FormEvent } from 'react'
 import PingChart from './PingChart'
 import type { PingDataPoint } from './types'
 import './App.css'
@@ -16,29 +17,38 @@ import './App.css'
 const POLL_INTERVAL_MS = 2000
 const MAX_POINTS = 20
 
-// A CORS-friendly endpoint: httpbin.org replies with
-// `Access-Control-Allow-Origin: *`, so the browser lets our `fetch()` read
-// the response instead of blocking it as cross-origin. That's what lets us
-// use the default `cors` mode (rather than the more limited `no-cors`
-// mode) and check `response.ok` below.
-const TARGET_URL = 'https://httpbin.org/get'
-
 function nowLabel() {
   return new Date().toLocaleTimeString()
 }
 
-// Times one real round trip to TARGET_URL using performance.now() —
-// a high-resolution, monotonic clock meant exactly for measuring elapsed
+// The user types a bare host ("example.com"), not a full URL, so this
+// fills in the `https://` prefix — unless they already typed one
+// (`http://internal-box/`, say), in which case we leave it alone.
+function buildTargetUrl(host: string) {
+  const trimmed = host.trim()
+  return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`
+}
+
+// Times one real round trip to `url` using performance.now() — a
+// high-resolution, monotonic clock meant exactly for measuring elapsed
 // time, unlike Date.now() (which can jump if the system clock changes).
-// Returns null if the request fails (offline, DNS error, non-2xx status,
-// etc.) so the caller can decide what to do instead of recording a bogus
-// number. `cache: 'no-store'` stops the browser from serving a cached
-// response, which would time a memory lookup rather than a network trip.
-async function measureLatencyMs() {
+//
+// `mode: 'no-cors'` matters here: Step 4 only ever hit one CORS-friendly
+// endpoint we controlled the choice of, so the browser was allowed to
+// expose the response and we could check `response.ok`. Now the user can
+// type ANY host, and most of the internet does not send the
+// `Access-Control-Allow-Origin` header that would let a normal `fetch()`
+// read the response cross-origin — the browser would block it and every
+// request would fail. `no-cors` mode asks for an "opaque" response
+// instead: the browser still performs the request and the fetch promise
+// still resolves (or rejects on a real network failure — offline, DNS
+// error, refused connection), which is all we need for timing, but we
+// can no longer read the response body or check its HTTP status.
+// That's the trade-off that makes arbitrary hostnames work at all.
+async function measureLatencyMs(url: string) {
   const start = performance.now()
   try {
-    const response = await fetch(TARGET_URL, { cache: 'no-store' })
-    if (!response.ok) return null
+    await fetch(url, { cache: 'no-store', mode: 'no-cors' })
     return Math.round(performance.now() - start)
   } catch {
     return null
@@ -63,19 +73,59 @@ function App() {
   // happen synchronously during render the way `randomLatencyMs()` could.
   const [data, setData] = useState<PingDataPoint[]>([])
 
+  // `hostInput` is a "controlled" input: the <input> element's value is
+  // driven entirely by this state (via `value={hostInput}`), and every
+  // keystroke fires `onChange`, which updates the state, which re-renders
+  // the input with the new value. Compare to a WinForms TextBox, where
+  // `.Text` just holds whatever the user typed — here React insists on
+  // owning that value itself rather than letting the DOM hold its own
+  // copy, which is what makes "disable Start until non-empty" below a
+  // plain read of state rather than a DOM query.
+  const [hostInput, setHostInput] = useState('')
+
+  // `targetUrl` is deliberately a SEPARATE piece of state from
+  // `hostInput`, only written by handleStart. If the effect below instead
+  // depended on `hostInput` directly, every keystroke would restart
+  // polling against a half-typed hostname. Splitting "what's in the box"
+  // from "what we're actually polling" is what lets Start act like a
+  // commit/confirm step.
+  const [targetUrl, setTargetUrl] = useState<string | null>(null)
+  const [isRunning, setIsRunning] = useState(false)
+
+  function handleStart(event: FormEvent) {
+    // <form onSubmit> fires on both a Start button click and pressing
+    // Enter in the input — preventDefault stops the browser's default
+    // "navigate to this URL" full-page-reload behavior for form submits.
+    event.preventDefault()
+    if (!hostInput.trim()) return
+    setData([]) // clear the chart so old and new hosts don't mix on one line
+    setTargetUrl(buildTargetUrl(hostInput))
+    setIsRunning(true)
+  }
+
+  function handleStop() {
+    setIsRunning(false)
+  }
+
   // useEffect runs side effects (anything reaching outside of "compute
   // some UI from props/state") after React has rendered. Setting up a
   // timer is a classic example — it's not something you can express as
   // "just" a return value of the component function.
   //
-  // The empty dependency array `[]` at the end means "run this setup
-  // exactly once, when the component first mounts" — comparable to logic
-  // you'd put in a constructor.
+  // The dependency array now lists `isRunning` and `targetUrl` instead of
+  // being empty: this effect re-runs (tearing down the old timer via
+  // cleanup, then setting up a new one) whenever either changes — i.e.
+  // whenever Start or Stop is clicked. That's the whole mechanism behind
+  // the buttons; there's no separate "timer control" API being called.
   useEffect(() => {
+    // Stopped, or nothing has ever been started yet — do nothing, and
+    // skip straight to the (no-op) cleanup below.
+    if (!isRunning || !targetUrl) return
+
     // `cancelled` guards against setting state after this effect's
-    // cleanup has run — e.g. a slow fetch resolving after the component
-    // unmounted, or (in React 18 StrictMode's dev-only double-invoke)
-    // after the first mount/cleanup pair. Closest C# analogy: checking a
+    // cleanup has run — e.g. a slow fetch resolving after Stop was
+    // clicked, or (in React 18 StrictMode's dev-only double-invoke) after
+    // the first mount/cleanup pair. Closest C# analogy: checking a
     // CancellationToken before touching shared state.
     let cancelled = false
 
@@ -83,7 +133,7 @@ function App() {
     // ignores whatever value it returns — so we define a normal async
     // function and call it, both once immediately and on every tick.
     async function poll() {
-      const latencyMs = await measureLatencyMs()
+      const latencyMs = await measureLatencyMs(targetUrl!)
       if (cancelled || latencyMs === null) return
       setData((prev) => {
         const next = [...prev, { time: nowLabel(), latencyMs }]
@@ -97,14 +147,14 @@ function App() {
     const id = setInterval(poll, POLL_INTERVAL_MS)
 
     // The function returned from useEffect is its "cleanup" function —
-    // React calls it automatically when the component unmounts (or
-    // before the effect re-runs, if the dependency array weren't empty).
-    // This is the closest thing React has to C#'s IDisposable.Dispose().
+    // React calls it automatically before the effect re-runs (Start/Stop
+    // clicked again) or when the component unmounts. This is the closest
+    // thing React has to C#'s IDisposable.Dispose().
     return () => {
       cancelled = true
       clearInterval(id)
     }
-  }, [])
+  }, [isRunning, targetUrl])
 
   // The JSX returned here is re-evaluated every time `data` changes
   // (because setData was called), producing a new description of what
@@ -115,11 +165,32 @@ function App() {
   return (
     <main className="app">
       <h1>Ping Latency</h1>
+      {/* onSubmit on the <form> (rather than onClick on the button alone)
+          is what makes pressing Enter in the input also trigger Start —
+          the browser fires a form's submit event either way. */}
+      <form className="controls" onSubmit={handleStart}>
+        <input
+          type="text"
+          value={hostInput}
+          onChange={(event) => setHostInput(event.target.value)}
+          placeholder="e.g. example.com"
+          aria-label="Host to ping"
+          disabled={isRunning}
+        />
+        <button type="submit" disabled={isRunning || !hostInput.trim()}>
+          Start
+        </button>
+        <button type="button" onClick={handleStop} disabled={!isRunning}>
+          Stop
+        </button>
+      </form>
       <p className="subtitle">
         {/* Curly braces embed real TypeScript expressions inside JSX —
-            here, simple arithmetic and string interpolation. */}
-        Live polling every {POLL_INTERVAL_MS / 1000}s (Step 4) &middot; real fetch()
-        round-trip time to {TARGET_URL}, rolling window of {MAX_POINTS} points
+            here, a conditional (ternary) expression picking between two
+            strings depending on `isRunning`. */}
+        {isRunning && targetUrl
+          ? `Live polling every ${POLL_INTERVAL_MS / 1000}s · real fetch() round-trip time to ${targetUrl}, rolling window of ${MAX_POINTS} points`
+          : 'Type a host above and press Start to begin measuring real round-trip latency.'}
       </p>
       {/* Passing our `data` state down as the `data` prop — PingChart has
           no idea this value changes over time; it just renders whatever
