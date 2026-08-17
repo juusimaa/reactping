@@ -215,6 +215,27 @@ function App() {
           it's given each time it's called, the same way any pure
           function would. */}
       <PingChart data={data} />
+      {/* A plain, static <footer> — no state or props involved, so this
+          is exactly as "just HTML" as it looks. Explains why these
+          numbers read higher than `ping`, which measures something
+          fundamentally cheaper (see the file-level note above
+          measureLatencyMs for the `no-cors` side of this same story). */}
+      <footer className="explainer">
+        <p>
+          Why do these numbers look higher than <code>ping</code>? System{' '}
+          <code>ping</code> sends one raw ICMP packet and times the reply from
+          the OS's network stack — no connection setup involved. This app
+          measures an HTTPS <code>fetch()</code>, which on a cold connection
+          also pays for a DNS lookup, a TCP handshake, and a TLS handshake
+          before the request/response itself even starts, and the reply
+          comes from the target's web server rather than its kernel. The
+          first sample after pressing Start is discarded for exactly this
+          reason — it is dominated by that one-time setup cost — but every
+          later point still reflects an HTTP round trip, not a raw ICMP one,
+          so it will typically stay several times slower than <code>ping</code>{' '}
+          to the same host.
+        </p>
+      </footer>
     </main>
   )
 }
