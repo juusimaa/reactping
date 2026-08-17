@@ -41,6 +41,43 @@
   margin-bottom: 1.5rem;
 }
 
+.app h2 {
+  text-align: left;
+  margin-top: 2rem;
+}
+
+.session-empty {
+  text-align: left;
+  color: var(--text);
+  font-size: 0.9375rem;
+}
+
+.session-list {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 0.9375rem;
+}
+
+.session-list th,
+.session-list td {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.session-list th {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.session-list td {
+  color: var(--text-h);
+}
+
+.session-list td:first-child {
+  word-break: break-all;
+}
+
 .explainer {
   margin-top: 2rem;
   padding-top: 1rem;

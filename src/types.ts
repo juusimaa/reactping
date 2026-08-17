@@ -20,3 +20,20 @@ export interface PingDataPoint {
   time: string
   latencyMs: number
 }
+
+// One completed Start→Stop run, summarized for the session history table.
+// Deliberately holds only the aggregate numbers (not every raw sample) —
+// by the time a PingSession exists, the run is over and the raw points
+// have already served their purpose feeding the chart.
+export interface PingSession {
+  // Not derived from any visible field (two sessions could share the same
+  // target and duration), so this exists purely to give React a stable
+  // `key` for each row — see the note above the .map() call in
+  // SessionList.tsx for why that matters.
+  id: string
+  targetUrl: string
+  durationMs: number
+  avgLatencyMs: number
+  minLatencyMs: number
+  maxLatencyMs: number
+}

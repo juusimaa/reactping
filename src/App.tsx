@@ -5,10 +5,11 @@
 // slot of memory, and calling useState() "checks out" the next slot in
 // that memory, in the exact order you call it every time the component
 // runs. That's why hook call order must stay identical between renders.
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import PingChart from './PingChart'
-import type { PingDataPoint } from './types'
+import SessionList from './SessionList'
+import type { PingDataPoint, PingSession } from './types'
 import './App.css'
 
 // Module-level `const` — evaluated once when the file is first loaded,
@@ -92,6 +93,23 @@ function App() {
   const [targetUrl, setTargetUrl] = useState<string | null>(null)
   const [isRunning, setIsRunning] = useState(false)
 
+  // Completed Start→Stop runs, newest first, shown in the table below the
+  // chart. This is genuinely separate from `data`: `data` is trimmed to a
+  // rolling window of MAX_POINTS for the chart, but a session's min/max/avg
+  // needs to reflect every sample from the whole run, not just whatever
+  // happens to still be on screen.
+  const [sessions, setSessions] = useState<PingSession[]>([])
+
+  // Two plain `useRef`s (not `useState`) tracking the in-progress session,
+  // for the same reason `cancelled`/`isFirstPoll` inside the polling effect
+  // aren't state further down: nothing on screen depends on these values
+  // directly, they're just bookkeeping read once, at Stop time, so they
+  // don't need to trigger a re-render on every update. `.current` is a
+  // ref's one mutable field — the closest analogy is a plain field on a
+  // long-lived object, rather than a bindable UI property like state.
+  const sessionStartRef = useRef<number | null>(null)
+  const sessionLatenciesRef = useRef<number[]>([])
+
   function handleStart(event: FormEvent) {
     // <form onSubmit> fires on both a Start button click and pressing
     // Enter in the input — preventDefault stops the browser's default
@@ -100,11 +118,33 @@ function App() {
     if (!hostInput.trim()) return
     setData([]) // clear the chart so old and new hosts don't mix on one line
     setTargetUrl(buildTargetUrl(hostInput))
+    sessionStartRef.current = Date.now()
+    sessionLatenciesRef.current = []
     setIsRunning(true)
   }
 
   function handleStop() {
     setIsRunning(false)
+
+    const latencies = sessionLatenciesRef.current
+    // Skip recording a session if Stop is pressed before any real sample
+    // came back (e.g. right after Start, while only the discarded warm-up
+    // request has fired) — there'd be nothing meaningful to average.
+    if (targetUrl && sessionStartRef.current !== null && latencies.length > 0) {
+      const session: PingSession = {
+        id: crypto.randomUUID(),
+        targetUrl,
+        durationMs: Date.now() - sessionStartRef.current,
+        avgLatencyMs: Math.round(
+          latencies.reduce((sum, latencyMs) => sum + latencyMs, 0) / latencies.length,
+        ),
+        minLatencyMs: Math.min(...latencies),
+        maxLatencyMs: Math.max(...latencies),
+      }
+      // Prepend rather than append so the most recently finished session
+      // shows up at the top of the table instead of the bottom.
+      setSessions((prev) => [session, ...prev])
+    }
   }
 
   // useEffect runs side effects (anything reaching outside of "compute
@@ -153,6 +193,10 @@ function App() {
         isFirstPoll = false
         return
       }
+      // Recorded here, outside of state, so the full-session stats in the
+      // table below survive the chart's rolling-window trim (below) —
+      // this array keeps every sample for the whole run, uncapped.
+      sessionLatenciesRef.current.push(latencyMs)
       setData((prev) => {
         const next = [...prev, { time: nowLabel(), latencyMs }]
         // Trim to a rolling window of the last MAX_POINTS entries so the
@@ -215,6 +259,11 @@ function App() {
           it's given each time it's called, the same way any pure
           function would. */}
       <PingChart data={data} />
+      <h2>Session history</h2>
+      {/* Passing `sessions` down the same way `data` is passed to
+          PingChart above — SessionList is just another pure function of
+          whatever it's given, with no awareness of state or timers. */}
+      <SessionList sessions={sessions} />
       {/* A plain, static <footer> — no state or props involved, so this
           is exactly as "just HTML" as it looks. Explains why these
           numbers read higher than `ping`, which measures something
