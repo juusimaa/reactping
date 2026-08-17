@@ -4,8 +4,10 @@
 // them with JSX exactly like your own components below.
 import {
   CartesianGrid,
+  Legend,
   Line,
   LineChart,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -40,6 +42,16 @@ interface PingChartProps {
 // list itself. If PingChart took multiple props, they'd all be fields
 // on that same one object — React always passes exactly one "props" argument.
 function PingChart({ data }: PingChartProps) {
+  // Plain arithmetic over the `data` prop, recomputed on every render —
+  // no extra state needed, since this is entirely derived from `data`
+  // (the same reasoning as a C# computed/read-only property). `average`
+  // is `null` before the first data point arrives so we can skip drawing
+  // the reference line rather than dividing by zero.
+  const average =
+    data.length > 0
+      ? Math.round(data.reduce((sum, point) => sum + point.latencyMs, 0) / data.length)
+      : null
+
   // JSX below looks like HTML/XML embedded in code — the closest C#
   // analogy is XAML, except JSX isn't a separate markup file: it's
   // syntactic sugar that compiles down to plain function calls
@@ -71,9 +83,11 @@ function PingChart({ data }: PingChartProps) {
             for us whenever it needs to render tooltip text, passing in
             the raw value; we return a 2-element array of [displayValue, label]. */}
         <Tooltip formatter={(value) => [`${value} ms`, 'Latency']} />
+        <Legend />
         <Line
           type="monotone"
           dataKey="latencyMs"
+          name="Latency"
           stroke="#2563eb"
           // dot={false} hides the little circle marker at each data point.
           dot={false}
@@ -82,6 +96,19 @@ function PingChart({ data }: PingChartProps) {
           // on every update would look jittery rather than smooth.
           isAnimationActive={false}
         />
+        {/* ReferenceLine draws a single horizontal line at a fixed y value
+            rather than connecting per-point data like <Line>, which is
+            exactly what "current average" means here: one flat line at
+            the mean of everything currently in the rolling window, redrawn
+            at a new height whenever `average` changes. */}
+        {average !== null && (
+          <ReferenceLine
+            y={average}
+            stroke="#f97316"
+            strokeDasharray="4 4"
+            label={{ value: `Avg ${average}ms`, position: 'insideTopRight', fill: '#f97316' }}
+          />
+        )}
       </LineChart>
     </ResponsiveContainer>
   )
