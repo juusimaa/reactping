@@ -129,12 +129,30 @@ function App() {
     // CancellationToken before touching shared state.
     let cancelled = false
 
+    // The very first request to a host pays a one-time cost this timer
+    // shouldn't take credit for: DNS lookup, TCP handshake, TLS
+    // handshake — none of which happen again on later requests, since the
+    // browser reuses that connection. `isFirstPoll` is what let us
+    // measure and discard that one cold-start sample without complicating
+    // `measureLatencyMs` itself. It's a plain closure variable rather
+    // than state because updating it should never trigger a re-render —
+    // same reasoning as `cancelled` above.
+    let isFirstPoll = true
+
     // setInterval's callback can't itself be `async` — setInterval just
     // ignores whatever value it returns — so we define a normal async
     // function and call it, both once immediately and on every tick.
     async function poll() {
       const latencyMs = await measureLatencyMs(targetUrl!)
       if (cancelled || latencyMs === null) return
+      if (isFirstPoll) {
+        // Warm the connection and discard the reading; only flip this
+        // once a measurement actually succeeds, so a failed warm-up
+        // attempt (e.g. transient DNS error) doesn't leave the real first
+        // sample discarded too.
+        isFirstPoll = false
+        return
+      }
       setData((prev) => {
         const next = [...prev, { time: nowLabel(), latencyMs }]
         // Trim to a rolling window of the last MAX_POINTS entries so the
@@ -143,7 +161,7 @@ function App() {
       })
     }
 
-    poll() // get the first point right away instead of waiting a full interval
+    poll() // fire the (discarded) warm-up request right away instead of waiting a full interval
     const id = setInterval(poll, POLL_INTERVAL_MS)
 
     // The function returned from useEffect is its "cleanup" function —
