@@ -46,7 +46,7 @@ function SessionList({ sessions }: SessionListProps) {
             diffing rows by their array position alone. */}
         {sessions.map((session) => (
           <tr key={session.id}>
-            <td>{session.targetUrl}</td>
+            <td>{session.targetHost}</td>
             <td>{formatDuration(session.durationMs)}</td>
             <td>{session.avgLatencyMs} ms</td>
             <td>{session.minLatencyMs} ms</td>

@@ -22,35 +22,35 @@ function nowLabel() {
   return new Date().toLocaleTimeString()
 }
 
-// The user types a bare host ("example.com"), not a full URL, so this
-// fills in the `https://` prefix — unless they already typed one
-// (`http://internal-box/`, say), in which case we leave it alone.
-function buildTargetUrl(host: string) {
-  const trimmed = host.trim()
-  return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`
+// The user types a bare host ("example.com") but might paste a full URL
+// instead ("https://example.com/some/path") — the /api/ping Function only
+// wants a bare hostname, so strip an optional scheme and anything after
+// the host (a path, port, etc.) rather than sending it along.
+function hostFromInput(input: string) {
+  return input.trim().replace(/^https?:\/\//i, '').split(/[/:]/)[0]
 }
 
-// Times one real round trip to `url` using performance.now() — a
-// high-resolution, monotonic clock meant exactly for measuring elapsed
-// time, unlike Date.now() (which can jump if the system clock changes).
+// Delegates the actual timing to our own /api/ping Azure Function (see
+// api/src/functions/ping.ts), which opens a raw TCP connection to
+// `host:443` and times the handshake — rather than the browser measuring
+// its own fetch to an arbitrary host directly.
 //
-// `mode: 'no-cors'` matters here: Step 4 only ever hit one CORS-friendly
-// endpoint we controlled the choice of, so the browser was allowed to
-// expose the response and we could check `response.ok`. Now the user can
-// type ANY host, and most of the internet does not send the
-// `Access-Control-Allow-Origin` header that would let a normal `fetch()`
-// read the response cross-origin — the browser would block it and every
-// request would fail. `no-cors` mode asks for an "opaque" response
-// instead: the browser still performs the request and the fetch promise
-// still resolves (or rejects on a real network failure — offline, DNS
-// error, refused connection), which is all we need for timing, but we
-// can no longer read the response body or check its HTTP status.
-// That's the trade-off that makes arbitrary hostnames work at all.
-async function measureLatencyMs(url: string) {
-  const start = performance.now()
+// That old approach needed `fetch(url, { mode: 'no-cors' })`: most of the
+// internet doesn't send the `Access-Control-Allow-Origin` header a normal
+// cross-origin fetch needs, so the browser would block reading the
+// response entirely. `no-cors` worked around that, but only by making the
+// response opaque — no real status, no way to tell "the host responded
+// with an error" from "the host is unreachable."
+//
+// Calling `/api/ping` instead is a same-origin request (it's served by
+// our own Static Web App), so this is a completely ordinary `fetch()`
+// with a real, readable JSON response — the Function is the one reaching
+// out to the arbitrary host, not the browser.
+async function measureLatencyMs(host: string) {
   try {
-    await fetch(url, { cache: 'no-store', mode: 'no-cors' })
-    return Math.round(performance.now() - start)
+    const response = await fetch(`/api/ping?host=${encodeURIComponent(host)}`, { cache: 'no-store' })
+    const result: { ok: boolean; latencyMs?: number } = await response.json()
+    return result.ok && typeof result.latencyMs === 'number' ? result.latencyMs : null
   } catch {
     return null
   }
@@ -84,13 +84,13 @@ function App() {
   // plain read of state rather than a DOM query.
   const [hostInput, setHostInput] = useState('')
 
-  // `targetUrl` is deliberately a SEPARATE piece of state from
+  // `targetHost` is deliberately a SEPARATE piece of state from
   // `hostInput`, only written by handleStart. If the effect below instead
   // depended on `hostInput` directly, every keystroke would restart
   // polling against a half-typed hostname. Splitting "what's in the box"
   // from "what we're actually polling" is what lets Start act like a
   // commit/confirm step.
-  const [targetUrl, setTargetUrl] = useState<string | null>(null)
+  const [targetHost, setTargetHost] = useState<string | null>(null)
   const [isRunning, setIsRunning] = useState(false)
 
   // Completed Start→Stop runs, newest first, shown in the table below the
@@ -117,7 +117,7 @@ function App() {
     event.preventDefault()
     if (!hostInput.trim()) return
     setData([]) // clear the chart so old and new hosts don't mix on one line
-    setTargetUrl(buildTargetUrl(hostInput))
+    setTargetHost(hostFromInput(hostInput))
     sessionStartRef.current = Date.now()
     sessionLatenciesRef.current = []
     setIsRunning(true)
@@ -130,10 +130,10 @@ function App() {
     // Skip recording a session if Stop is pressed before any real sample
     // came back (e.g. right after Start, while only the discarded warm-up
     // request has fired) — there'd be nothing meaningful to average.
-    if (targetUrl && sessionStartRef.current !== null && latencies.length > 0) {
+    if (targetHost && sessionStartRef.current !== null && latencies.length > 0) {
       const session: PingSession = {
         id: crypto.randomUUID(),
-        targetUrl,
+        targetHost,
         durationMs: Date.now() - sessionStartRef.current,
         avgLatencyMs: Math.round(
           latencies.reduce((sum, latencyMs) => sum + latencyMs, 0) / latencies.length,
@@ -152,7 +152,7 @@ function App() {
   // timer is a classic example — it's not something you can express as
   // "just" a return value of the component function.
   //
-  // The dependency array now lists `isRunning` and `targetUrl` instead of
+  // The dependency array now lists `isRunning` and `targetHost` instead of
   // being empty: this effect re-runs (tearing down the old timer via
   // cleanup, then setting up a new one) whenever either changes — i.e.
   // whenever Start or Stop is clicked. That's the whole mechanism behind
@@ -160,7 +160,7 @@ function App() {
   useEffect(() => {
     // Stopped, or nothing has ever been started yet — do nothing, and
     // skip straight to the (no-op) cleanup below.
-    if (!isRunning || !targetUrl) return
+    if (!isRunning || !targetHost) return
 
     // `cancelled` guards against setting state after this effect's
     // cleanup has run — e.g. a slow fetch resolving after Stop was
@@ -169,12 +169,14 @@ function App() {
     // CancellationToken before touching shared state.
     let cancelled = false
 
-    // The very first request to a host pays a one-time cost this timer
-    // shouldn't take credit for: DNS lookup, TCP handshake, TLS
-    // handshake — none of which happen again on later requests, since the
-    // browser reuses that connection. `isFirstPoll` is what let us
-    // measure and discard that one cold-start sample without complicating
-    // `measureLatencyMs` itself. It's a plain closure variable rather
+    // Every poll now opens a brand-new TCP socket from the Azure Function
+    // (that's the point — it's what's actually being timed), so there's
+    // no browser-side connection reuse left to amortize away like there
+    // was before. The one-time cost worth discarding now is different:
+    // if the Function has been idle, this first invocation pays Azure's
+    // Consumption-plan cold-start cost on top of the real TCP time, which
+    // would make the first sample look misleadingly slow compared to
+    // every later one. `isFirstPoll` is a plain closure variable rather
     // than state because updating it should never trigger a re-render —
     // same reasoning as `cancelled` above.
     let isFirstPoll = true
@@ -183,7 +185,7 @@ function App() {
     // ignores whatever value it returns — so we define a normal async
     // function and call it, both once immediately and on every tick.
     async function poll() {
-      const latencyMs = await measureLatencyMs(targetUrl!)
+      const latencyMs = await measureLatencyMs(targetHost!)
       if (cancelled || latencyMs === null) return
       if (isFirstPoll) {
         // Warm the connection and discard the reading; only flip this
@@ -216,7 +218,7 @@ function App() {
       cancelled = true
       clearInterval(id)
     }
-  }, [isRunning, targetUrl])
+  }, [isRunning, targetHost])
 
   // The JSX returned here is re-evaluated every time `data` changes
   // (because setData was called), producing a new description of what
@@ -250,8 +252,8 @@ function App() {
         {/* Curly braces embed real TypeScript expressions inside JSX —
             here, a conditional (ternary) expression picking between two
             strings depending on `isRunning`. */}
-        {isRunning && targetUrl
-          ? `Live polling every ${POLL_INTERVAL_MS / 1000}s · real fetch() round-trip time to ${targetUrl}, rolling window of ${MAX_POINTS} points`
+        {isRunning && targetHost
+          ? `Live polling every ${POLL_INTERVAL_MS / 1000}s · server-measured TCP connect time to ${targetHost}, rolling window of ${MAX_POINTS} points`
           : 'Type a host above and press Start to begin measuring real round-trip latency.'}
       </p>
       {/* Passing our `data` state down as the `data` prop — PingChart has
@@ -266,23 +268,23 @@ function App() {
       <SessionList sessions={sessions} />
       {/* A plain, static <footer> — no state or props involved, so this
           is exactly as "just HTML" as it looks. Explains why these
-          numbers read higher than `ping`, which measures something
-          fundamentally cheaper (see the file-level note above
-          measureLatencyMs for the `no-cors` side of this same story). */}
+          numbers still read higher than `ping`, even though the
+          measurement moved server-side (see the file-level note above
+          measureLatencyMs for why it now calls /api/ping at all). */}
       <footer className="explainer">
         <p>
           Why do these numbers look higher than <code>ping</code>? System{' '}
           <code>ping</code> sends one raw ICMP packet and times the reply from
-          the OS's network stack — no connection setup involved. This app
-          measures an HTTPS <code>fetch()</code>, which on a cold connection
-          also pays for a DNS lookup, a TCP handshake, and a TLS handshake
-          before the request/response itself even starts, and the reply
-          comes from the target's web server rather than its kernel. The
-          first sample after pressing Start is discarded for exactly this
-          reason — it is dominated by that one-time setup cost — but every
-          later point still reflects an HTTP round trip, not a raw ICMP one,
-          so it will typically stay several times slower than <code>ping</code>{' '}
-          to the same host.
+          the OS's network stack. This app instead times a TCP handshake —
+          measured server-side, by an Azure Function connecting to the
+          target on port 443, rather than the browser measuring its own
+          request — which is lighter than a full HTTPS request but still
+          heavier than ICMP: no packet round trip alone, but a real
+          three-way TCP handshake (SYN, SYN-ACK, ACK) that a raw ping never
+          has to do. Each poll also crosses two networks instead of one —
+          your browser to the Azure Function, then the Function to the
+          target — so this number is closer to <code>ping</code> than the
+          old in-browser measurement was, but still not identical to it.
         </p>
       </footer>
     </main>
