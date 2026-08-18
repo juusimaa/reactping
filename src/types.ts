@@ -31,7 +31,7 @@ export interface PingSession {
   // `key` for each row — see the note above the .map() call in
   // SessionList.tsx for why that matters.
   id: string
-  targetUrl: string
+  targetHost: string
   durationMs: number
   avgLatencyMs: number
   minLatencyMs: number
