@@ -15,21 +15,21 @@ A web application that measures TCP connection latency to remote hosts using ser
 
 ```
 ┌─────────────────────────┐     ┌──────────────────────────┐
-│   Browser (React SPA)     │────▶│  Azure Static Web App      │
-│         client/          │     │      (serves HTML/JS)     │
+│   Browser (React SPA)   │────▶│  Azure Static Web App    │
+│         client/         │     │      (serves HTML/JS)    │
 └─────────────────────────┘     └──────────────────────────┘
                                            │
                                            ▼
                                      ┌─────────────────────┐
-                                     │  Azure Function      │
-                                     │  /api/ping           │
-                                     │  (Node.js backend)   │
+                                     │  Azure Function     │
+                                     │  /api/ping          │
+                                     │  (Node.js backend)  │
                                      └─────────────────────┘
                                            │
                                            ▼
                                  ┌────────────────────────┐
-                                 │  Target Host :443       │
-                                 │  (TCP handshake timing) │
+                                 │  Target Host :443      │
+                                 │  (TCP handshake timing)│
                                  └────────────────────────┘
 ```
 
